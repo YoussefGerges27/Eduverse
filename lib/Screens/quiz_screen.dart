@@ -43,7 +43,16 @@ class _EnglishExamScreenState extends State<EnglishExamScreen> {
   bool _isCalibrated = false;
   final List<double> _calibrationYawSamples = [];
   final List<double> _calibrationPitchSamples = [];
-  static const int _calibrationSampleCount = 10;
+  static const int _calibrationSampleCount = 15;
+
+  // Debug/Preview values (temporary for testing)
+  bool _faceDetected = false;
+  String _direction = 'FORWARD';
+  double _debugYaw = 0;
+  double _debugPitch = 0;
+
+  // Show calibration screen first
+  bool _showCalibrationScreen = true;
 
   @override
   void initState() {
@@ -126,6 +135,17 @@ class _EnglishExamScreenState extends State<EnglishExamScreen> {
                 _calibrationPitchSamples.reduce((a, b) => a + b) /
                 _calibrationPitchSamples.length;
             _isCalibrated = true;
+            debugPrint(
+              'Auto-calibrated - Yaw offset: $_yawOffset, Pitch offset: $_pitchOffset',
+            );
+          }
+
+          if (mounted) {
+            setState(() {
+              _faceDetected = true;
+              _debugYaw = rawYawRatio * 100;
+              _debugPitch = rawPitchRatio * 100;
+            });
           }
 
           _processing = false;
@@ -137,19 +157,40 @@ class _EnglishExamScreenState extends State<EnglishExamScreen> {
         final yawRatio = rawYawRatio - _yawOffset;
         final pitchRatio = rawPitchRatio - _pitchOffset;
 
-        bool isLookingAway = false;
+        // Store debug values
+        _debugYaw = yawRatio * 100;
+        _debugPitch = pitchRatio * 100;
 
-        if (yawRatio > 0.15 || yawRatio < -0.15) {
-          isLookingAway = true;
+        String horizontal = 'FORWARD';
+        String vertical = 'FORWARD';
+
+        // Thresholds
+        if (yawRatio > 0.15) {
+          horizontal = 'LEFT';
+        } else if (yawRatio < -0.15) {
+          horizontal = 'RIGHT';
         }
 
-        if (pitchRatio > 0.12 || pitchRatio < -0.12) {
-          isLookingAway = true;
+        if (pitchRatio > 0.12) {
+          vertical = 'DOWN';
+        } else if (pitchRatio < -0.12) {
+          vertical = 'UP';
         }
 
-        if (isLookingAway) {
+        String newDirection;
+        if (horizontal == 'FORWARD' && vertical == 'FORWARD') {
+          newDirection = 'FORWARD';
+        } else if (horizontal != 'FORWARD' && vertical != 'FORWARD') {
+          newDirection = '$vertical-$horizontal';
+        } else if (horizontal != 'FORWARD') {
+          newDirection = horizontal;
+        } else {
+          newDirection = vertical;
+        }
+
+        // Only count warnings after calibration screen is dismissed
+        if (!_showCalibrationScreen && newDirection != 'FORWARD') {
           _internalWarningCount++;
-          // Every 3 internal warnings = 1 displayed warning
           int newDisplayedCount = _internalWarningCount ~/ 3;
           if (newDisplayedCount != _warningActive &&
               newDisplayedCount <= _warningTotal &&
@@ -158,6 +199,19 @@ class _EnglishExamScreenState extends State<EnglishExamScreen> {
               _warningActive = newDisplayedCount;
             });
           }
+        }
+
+        if (mounted) {
+          setState(() {
+            _faceDetected = true;
+            _direction = newDirection;
+          });
+        }
+      } else {
+        if (mounted) {
+          setState(() {
+            _faceDetected = false;
+          });
         }
       }
     } catch (e) {
@@ -215,6 +269,27 @@ class _EnglishExamScreenState extends State<EnglishExamScreen> {
           bytesPerRow: image.planes[0].bytesPerRow,
         ),
       );
+    }
+  }
+
+  void _recalibrate() {
+    setState(() {
+      _isCalibrated = false;
+      _calibrationYawSamples.clear();
+      _calibrationPitchSamples.clear();
+      _yawOffset = 0.0;
+      _pitchOffset = 0.0;
+      _showCalibrationScreen = true;
+    });
+  }
+
+  void _startExam() {
+    if (_isCalibrated) {
+      setState(() {
+        _showCalibrationScreen = false;
+        _internalWarningCount = 0;
+        _warningActive = 0;
+      });
     }
   }
 
@@ -373,6 +448,11 @@ class _EnglishExamScreenState extends State<EnglishExamScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Show calibration screen first
+    if (_showCalibrationScreen) {
+      return _buildCalibrationScreen();
+    }
+
     if (_isLoading) {
       return Scaffold(
         backgroundColor: Colors.white,
@@ -486,6 +566,8 @@ class _EnglishExamScreenState extends State<EnglishExamScreen> {
                           child: _CameraThumbnail(
                             cameraReady: _cameraReady,
                             controller: _cameraController!,
+                            faceDetected: _faceDetected,
+                            direction: _direction,
                           ),
                         ),
                     ],
@@ -547,7 +629,69 @@ class _EnglishExamScreenState extends State<EnglishExamScreen> {
                     ),
                   ),
 
-                  const SizedBox(height: 40),
+                  // DEBUG INFO - TEMPORARY (remove in production)
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.yellow.shade100,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.orange),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '🔧 DEBUG INFO (temporary)',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                            color: Colors.orange.shade800,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Face: ${_faceDetected ? "✅ Detected" : "❌ Not detected"}',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: _faceDetected ? Colors.green : Colors.red,
+                          ),
+                        ),
+                        Text(
+                          'Direction: $_direction',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color:
+                                _direction == 'FORWARD'
+                                    ? Colors.green
+                                    : Colors.red,
+                          ),
+                        ),
+                        Text(
+                          'Yaw: ${_debugYaw.toStringAsFixed(1)} | Pitch: ${_debugPitch.toStringAsFixed(1)}',
+                          style: const TextStyle(fontSize: 11),
+                        ),
+                        Text(
+                          'Internal warnings: $_internalWarningCount | Displayed: $_warningActive',
+                          style: const TextStyle(fontSize: 11),
+                        ),
+                        InkWell(
+                          onTap: _recalibrate,
+                          child: Text(
+                            '🔄 Tap to recalibrate',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Colors.blue,
+                              decoration: TextDecoration.underline,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // END DEBUG INFO
+                  const SizedBox(height: 20),
 
                   // Question progress
                   Text(
@@ -574,69 +718,79 @@ class _EnglishExamScreenState extends State<EnglishExamScreen> {
                   const SizedBox(height: 16),
 
                   // Options list
-                  ...List.generate(options.length, (index) {
-                    final option = options[index];
-                    final optionId = option['id'];
-                    final isSelected = selectedOptionId == optionId;
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 12),
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(12),
-                        onTap: () => _handleAnswerSelection(optionId),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 14,
-                            vertical: 16,
-                          ),
-                          decoration: BoxDecoration(
-                            color:
-                                isSelected
-                                    ? const Color.fromARGB(255, 134, 171, 246)
-                                    : Colors.white,
+                  Expanded(
+                    child: ListView.builder(
+                      itemCount: options.length,
+                      itemBuilder: (context, index) {
+                        final option = options[index];
+                        final optionId = option['id'];
+                        final isSelected = selectedOptionId == optionId;
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: InkWell(
                             borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                              color:
-                                  isSelected ? Color(0xFF002E8A) : cardBorder,
-                              width: isSelected ? 2 : 1,
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withOpacity(0.04),
-                                blurRadius: 8,
-                                offset: const Offset(0, 2),
+                            onTap: () => _handleAnswerSelection(optionId),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                                vertical: 16,
                               ),
-                            ],
-                          ),
-                          child: Row(
-                            children: [
-                              Icon(
-                                isSelected
-                                    ? Icons.radio_button_checked
-                                    : Icons.radio_button_off,
+                              decoration: BoxDecoration(
                                 color:
                                     isSelected
-                                        ? Color(0xFF002E8A)
-                                        : Colors.grey,
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Text(
-                                  option['text'] ?? 'No option text',
-                                  style: const TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w600,
-                                    color: Colors.black,
-                                  ),
+                                        ? const Color.fromARGB(
+                                          255,
+                                          134,
+                                          171,
+                                          246,
+                                        )
+                                        : Colors.white,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color:
+                                      isSelected
+                                          ? Color(0xFF002E8A)
+                                          : cardBorder,
+                                  width: isSelected ? 2 : 1,
                                 ),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.04),
+                                    blurRadius: 8,
+                                    offset: const Offset(0, 2),
+                                  ),
+                                ],
                               ),
-                            ],
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    isSelected
+                                        ? Icons.radio_button_checked
+                                        : Icons.radio_button_off,
+                                    color:
+                                        isSelected
+                                            ? Color(0xFF002E8A)
+                                            : Colors.grey,
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Text(
+                                      option['text'] ?? 'No option text',
+                                      style: const TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w600,
+                                        color: Colors.black,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
                           ),
-                        ),
-                      ),
-                    );
-                  }),
-
-                  const Spacer(),
+                        );
+                      },
+                    ),
+                  ),
 
                   // Navigation buttons
                   Row(
@@ -723,28 +877,255 @@ class _EnglishExamScreenState extends State<EnglishExamScreen> {
       ),
     );
   }
+
+  Widget _buildCalibrationScreen() {
+    return Scaffold(
+      backgroundColor: const Color(0xFF002E8A),
+      body: SafeArea(
+        child: Column(
+          children: [
+            const SizedBox(height: 40),
+            const Text(
+              'Exam Setup',
+              style: TextStyle(
+                fontSize: 28,
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Position yourself for proctoring',
+              style: TextStyle(fontSize: 16, color: Colors.white70),
+            ),
+            const SizedBox(height: 40),
+
+            // Camera preview
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: Container(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color:
+                          _isCalibrated
+                              ? Colors.green
+                              : (_faceDetected ? Colors.orange : Colors.red),
+                      width: 4,
+                    ),
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child:
+                      _cameraReady && _cameraController != null
+                          ? CameraPreview(_cameraController!)
+                          : const Center(
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                            ),
+                          ),
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 24),
+
+            // Status info
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 24),
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                children: [
+                  // Face detection status
+                  Row(
+                    children: [
+                      Icon(
+                        _faceDetected
+                            ? Icons.check_circle
+                            : Icons.error_outline,
+                        color: _faceDetected ? Colors.green : Colors.red,
+                      ),
+                      const SizedBox(width: 12),
+                      Text(
+                        _faceDetected ? 'Face Detected' : 'No Face Detected',
+                        style: TextStyle(
+                          color: _faceDetected ? Colors.green : Colors.red,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+
+                  // Calibration status
+                  Row(
+                    children: [
+                      Icon(
+                        _isCalibrated
+                            ? Icons.check_circle
+                            : Icons.hourglass_empty,
+                        color: _isCalibrated ? Colors.green : Colors.orange,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              _isCalibrated
+                                  ? 'Calibration Complete'
+                                  : 'Calibrating...',
+                              style: TextStyle(
+                                color:
+                                    _isCalibrated
+                                        ? Colors.green
+                                        : Colors.orange,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            if (!_isCalibrated)
+                              Text(
+                                'Look straight at the screen (${_calibrationYawSamples.length}/$_calibrationSampleCount)',
+                                style: const TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 12,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+
+                  // Debug values (temporary)
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.yellow.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          '🔧 Debug (temporary)',
+                          style: TextStyle(
+                            color: Colors.yellow,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        Text(
+                          'Direction: $_direction',
+                          style: TextStyle(
+                            color:
+                                _direction == 'FORWARD'
+                                    ? Colors.green
+                                    : Colors.red,
+                            fontSize: 11,
+                          ),
+                        ),
+                        Text(
+                          'Yaw: ${_debugYaw.toStringAsFixed(1)} | Pitch: ${_debugPitch.toStringAsFixed(1)}',
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 24),
+
+            // Start button
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: _isCalibrated ? _startExam : null,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.white,
+                    foregroundColor: const Color(0xFF002E8A),
+                    disabledBackgroundColor: Colors.white.withOpacity(0.3),
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: Text(
+                    _isCalibrated ? 'Start Exam' : 'Please wait...',
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
+            // Recalibrate button
+            if (_isCalibrated)
+              TextButton(
+                onPressed: _recalibrate,
+                child: const Text(
+                  'Recalibrate',
+                  style: TextStyle(color: Colors.white70),
+                ),
+              ),
+
+            const SizedBox(height: 24),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 // Separate widget for camera thumbnail to keep layout tidy
 class _CameraThumbnail extends StatelessWidget {
   final bool cameraReady;
   final CameraController controller;
+  final bool faceDetected;
+  final String direction;
 
   const _CameraThumbnail({
     Key? key,
     required this.cameraReady,
     required this.controller,
+    this.faceDetected = false,
+    this.direction = 'FORWARD',
   }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
+    Color borderColor = Colors.grey;
+    if (faceDetected) {
+      borderColor = direction == 'FORWARD' ? Colors.green : Colors.orange;
+    } else {
+      borderColor = Colors.red;
+    }
+
     return Container(
-      width: 92,
-      height: 92,
+      width: 155,
+      height: 125,
       decoration: BoxDecoration(
         color: Colors.black,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE6E6E6)),
+        border: Border.all(color: borderColor, width: 3),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.06),
@@ -756,7 +1137,37 @@ class _CameraThumbnail extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       child:
           cameraReady
-              ? CameraPreview(controller)
+              ? Stack(
+                children: [
+                  CameraPreview(controller),
+                  // Small indicator
+                  Positioned(
+                    bottom: 4,
+                    right: 4,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.black54,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        direction,
+                        style: TextStyle(
+                          color:
+                              direction == 'FORWARD'
+                                  ? Colors.green
+                                  : Colors.orange,
+                          fontSize: 8,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              )
               : const Center(
                 child: SizedBox(
                   width: 20,
